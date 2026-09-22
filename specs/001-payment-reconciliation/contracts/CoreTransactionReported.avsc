@@ -1,0 +1,46 @@
+{
+  "type": "record",
+  "name": "CoreTransactionReported",
+  "namespace": "pe.com.bancatest.banking.events",
+  "doc": "Movimiento del core bancario. Contrato de integracion de ENTRADA. El adaptador lo traduce a RegisterCoreTransactionCommand; el movimiento NO es entidad de dominio ni tabla: se compara y se descarta. El namespace conserva 'banking' porque identifica al sistema emisor; el nombre del tipo sigue el glosario de la constitucion (Movimiento del core -> CoreTransaction).",
+  "fields": [
+    {
+      "name": "eventId",
+      "type": "string",
+      "default": "",
+      "doc": "Identificador del evento. INFORMATIVO: no participa en la idempotencia (FR-018)."
+    },
+    {
+      "name": "operationReference",
+      "type": "string",
+      "default": "",
+      "doc": "Referencia de operacion con la que se localiza la conciliacion PENDING a resolver."
+    },
+    {
+      "name": "amount",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 19,
+        "scale": 2
+      },
+      "default": "\u0000",
+      "doc": "Monto del movimiento del core. Se resta del monto del pago para obtener la diferencia (FR-005)."
+    },
+    {
+      "name": "currency",
+      "type": "string",
+      "default": "",
+      "doc": "Codigo ISO-4217. Distinto de PEN es invalido y va a la DLQ (FR-022)."
+    },
+    {
+      "name": "occurredAt",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      },
+      "default": 0,
+      "doc": "Instante en que ocurrio el movimiento. Informativo."
+    }
+  ]
+}

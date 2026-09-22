@@ -1,0 +1,63 @@
+{
+  "type": "record",
+  "name": "ReconciliationMatched",
+  "namespace": "pe.com.bancatest.reconciliation.events",
+  "doc": "Conciliacion conforme: la diferencia es cero o positiva dentro de la tolerancia (FR-006). Contrato de SALIDA, publicado en el canal de conformes tras confirmar la transaccion (FR-013, FR-014b). Se entrega como .avsc para que el equipo lo registre.",
+  "fields": [
+    {
+      "name": "eventId",
+      "type": "string",
+      "default": "",
+      "doc": "Identificador de este evento de salida, generado por el servicio."
+    },
+    {
+      "name": "reconciliationId",
+      "type": "string",
+      "default": "",
+      "doc": "Identificador interno de la conciliacion, UUIDv7 en representacion canonica."
+    },
+    {
+      "name": "operationReference",
+      "type": "string",
+      "default": "",
+      "doc": "Referencia de operacion. Se usa ademas como key del mensaje Kafka, para que todos los eventos de una misma operacion caigan en la misma particion."
+    },
+    {
+      "name": "amount",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 19,
+        "scale": 2
+      },
+      "default": "\u0000",
+      "doc": "Monto del pago reportado que se concilio."
+    },
+    {
+      "name": "currency",
+      "type": "string",
+      "default": "",
+      "doc": "Codigo ISO-4217. Siempre PEN en el alcance actual."
+    },
+    {
+      "name": "difference",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 19,
+        "scale": 2
+      },
+      "default": "\u0000",
+      "doc": "Diferencia = monto del pago - monto del movimiento. Cero o positiva y menor o igual a la tolerancia; de lo contrario no seria MATCHED."
+    },
+    {
+      "name": "reconciledAt",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      },
+      "default": 0,
+      "doc": "Instante en que la conciliacion paso a MATCHED."
+    }
+  ]
+}

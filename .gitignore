@@ -1,0 +1,43 @@
+# Secrets. The real .env must never be committed (constitution IV).
+.env
+.env.local
+*.env
+!.env.example
+
+# Java / Maven
+target/
+*.class
+*.jar
+*.war
+*.ear
+!.mvn/wrapper/maven-wrapper.jar
+.mvn/timing.properties
+dependency-reduced-pom.xml
+
+# Generated sources are build output, never versioned:
+# Avro classes and the JAX-RS interfaces/models from the OpenAPI contract.
+# The contracts themselves (src/main/avro, src/main/resources/openapi) ARE versioned.
+target/generated-sources/
+
+# Quarkus
+.quarkus/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+nb-configuration.xml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and temp
+*.log
+*.tmp
+*.swp

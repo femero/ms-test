@@ -1,0 +1,385 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.bancatest</groupId>
+  <artifactId>ms-conciliaciones</artifactId>
+  <version>1.0.0-SNAPSHOT</version>
+  <packaging>jar</packaging>
+  <name>ms-conciliaciones</name>
+  <description>Payment reconciliation microservice - technical demo</description>
+
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+    <!-- Quarkus 3.22+ is REQUIRED: quarkus.hibernate-orm.schema-management.strategy
+         replaced the deprecated database.generation in 3.22 (see research.md R-01).
+         Downgrading below 3.22 silently breaks the schema-management config. -->
+    <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
+    <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
+    <quarkus.platform.version>3.31.2</quarkus.platform.version>
+
+    <mapstruct.version>1.6.3</mapstruct.version>
+    <lombok.version>1.18.36</lombok.version>
+    <lombok-mapstruct-binding.version>0.2.0</lombok-mapstruct-binding.version>
+    <avro.version>1.12.0</avro.version>
+    <confluent.version>7.8.0</confluent.version>
+    <uuid-generator.version>5.1.0</uuid-generator.version>
+
+    <!-- pgjdbc: NO override needed. Verified on 2026-09-20 with
+           mvn dependency:list | grep postgresql
+         that quarkus-bom 3.31.2 resolves org.postgresql:postgresql:42.7.9,
+         which already carries PR #3849 - the fix for the virtual-thread pinning
+         that 42.7.8 reintroduced in ResourceLock.obtain() (R-13).
+         JEP 491, the runtime-level fix, is Java 24; we are on Java 21, so the
+         driver version is the only defence and it is already satisfied.
+         If a future BOM bump drags in exactly 42.7.8, pin >= 42.7.9 here.
+         Re-check with: mvn dependency:list | grep postgresql -->
+
+    <openapi-generator.version>7.24.0</openapi-generator.version>
+    <checkstyle-plugin.version>3.6.0</checkstyle-plugin.version>
+    <checkstyle.version>10.21.0</checkstyle.version>
+    <spotless.version>2.44.3</spotless.version>
+    <palantir.version>2.50.0</palantir.version>
+    <surefire-plugin.version>3.5.2</surefire-plugin.version>
+    <compiler-plugin.version>3.13.0</compiler-plugin.version>
+  </properties>
+
+  <repositories>
+    <!-- Required for io.confluent:kafka-avro-serializer (R-06) -->
+    <repository>
+      <id>confluent</id>
+      <url>https://packages.confluent.io/maven/</url>
+    </repository>
+  </repositories>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>${quarkus.platform.group-id}</groupId>
+        <artifactId>${quarkus.platform.artifact-id}</artifactId>
+        <version>${quarkus.platform.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <!-- REST (blocking, virtual threads) -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-rest</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-rest-jackson</artifactId>
+    </dependency>
+
+    <!-- Configuration -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-config-yaml</artifactId>
+    </dependency>
+
+    <!-- Persistence: Panache repository over JPA entities (never PanacheEntity) -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-hibernate-orm-panache</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-jdbc-postgresql</artifactId>
+    </dependency>
+
+    <!-- Redis: imperative RedisDataSource, coherent with the blocking model -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-redis-client</artifactId>
+    </dependency>
+
+    <!-- Messaging -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-messaging-kafka</artifactId>
+    </dependency>
+
+    <!-- Confluent Schema Registry Avro serde. Apicurio is forbidden (constitution III).
+
+         NOTE for anyone hitting "PKIX path building failed" on a fresh machine:
+         io.confluent:kafka-avro-serializer is NOT on Maven Central, only on
+         packages.confluent.io. Behind a TLS-intercepting proxy (Zscaler and the
+         like) the JDK truststore must carry the proxy root CA, or Maven cannot
+         reach it even though curl can - curl uses the OS trust store, Maven does
+         not. Import it with:
+           keytool -importcert -cacerts -alias <proxy-root> -file <cert>  -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-confluent-registry-avro</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-rest-client</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.confluent</groupId>
+      <artifactId>kafka-avro-serializer</artifactId>
+      <version>${confluent.version}</version>
+      <exclusions>
+        <!-- The Confluent registry libraries bring their own copy of the Jakarta REST
+             API, which clashes with the one Quarkus manages (R-06). -->
+        <exclusion>
+          <groupId>jakarta.ws.rs</groupId>
+          <artifactId>jakarta.ws.rs-api</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.avro</groupId>
+      <artifactId>avro</artifactId>
+      <version>${avro.version}</version>
+    </dependency>
+
+    <!-- Structured logging -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-logging-json</artifactId>
+    </dependency>
+
+    <!-- Bean validation for the generated JAX-RS models -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-hibernate-validator</artifactId>
+    </dependency>
+
+    <!-- UUIDv7 generated in the application so start() returns a complete aggregate (R-05) -->
+    <dependency>
+      <groupId>com.fasterxml.uuid</groupId>
+      <artifactId>java-uuid-generator</artifactId>
+      <version>${uuid-generator.version}</version>
+    </dependency>
+
+    <!-- Mapping. Lombok is allowed ONLY in the JPA entity package (constitution X). -->
+    <dependency>
+      <groupId>org.mapstruct</groupId>
+      <artifactId>mapstruct</artifactId>
+      <version>${mapstruct.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+      <version>${lombok.version}</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <!-- Tests: plain JUnit for the domain, InMemoryConnector for adapters.
+         Testcontainers is forbidden (constitution XIII). -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-junit</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.rest-assured</groupId>
+      <artifactId>rest-assured</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.mockito</groupId>
+      <artifactId>mockito-core</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.awaitility</groupId>
+      <artifactId>awaitility</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.smallrye.reactive</groupId>
+      <artifactId>smallrye-reactive-messaging-in-memory</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>${quarkus.platform.group-id}</groupId>
+        <artifactId>quarkus-maven-plugin</artifactId>
+        <version>${quarkus.platform.version}</version>
+        <extensions>true</extensions>
+        <executions>
+          <execution>
+            <goals>
+              <goal>build</goal>
+              <goal>generate-code</goal>
+              <goal>generate-code-tests</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- NOTE: there is deliberately NO avro-maven-plugin here.
+           quarkus-confluent-registry-avro pulls in quarkus-avro, whose own codegen
+           provider already compiles src/main/avro. Running both produced duplicate
+           classes. Its settings live in application.yaml under `avro.codegen.*`
+           (no quarkus. prefix), where enableDecimalLogicalType is switched on -
+           its default of false yields ByteBuffer instead of BigDecimal (R-12). -->
+
+      <!-- OpenAPI contract -> JAX-RS interfaces + models.
+           Three defaults here violate the plan or the constitution if left alone:
+             dateLibrary=legacy     -> java.util.Date, forbidden by constitution X
+             useSwaggerAnnotations  -> @Schema/@Operation in code, forbidden by the plan
+             useJakartaEe=false     -> javax namespace, does not compile on Quarkus 3
+           See D-01. The Quarkiverse extension was discarded: its two generators are
+           Preview and Experimental. -->
+      <plugin>
+        <groupId>org.openapitools</groupId>
+        <artifactId>openapi-generator-maven-plugin</artifactId>
+        <version>${openapi-generator.version}</version>
+        <executions>
+          <execution>
+            <goals>
+              <goal>generate</goal>
+            </goals>
+            <phase>generate-sources</phase>
+            <configuration>
+              <inputSpec>${project.basedir}/src/main/resources/openapi/reconciliation-api.yaml</inputSpec>
+              <generatorName>jaxrs-spec</generatorName>
+              <library>quarkus</library>
+              <apiPackage>com.bancatest.reconciliation.infrastructure.adapter.in.rest.generated.api</apiPackage>
+              <modelPackage>com.bancatest.reconciliation.infrastructure.adapter.in.rest.generated.model</modelPackage>
+              <generateApiTests>false</generateApiTests>
+              <generateModelTests>false</generateModelTests>
+              <generateApiDocumentation>false</generateApiDocumentation>
+              <generateModelDocumentation>false</generateModelDocumentation>
+              <configOptions>
+                <interfaceOnly>true</interfaceOnly>
+                <useJakartaEe>true</useJakartaEe>
+                <useSwaggerAnnotations>false</useSwaggerAnnotations>
+                <dateLibrary>java8</dateLibrary>
+                <returnResponse>false</returnResponse>
+                <sourceFolder>src/gen/java</sourceFolder>
+                <!-- Without this the generator emits org.openapitools.jackson.nullable.JsonNullable
+                     wrappers and we would have to drag in jackson-databind-nullable. We do not
+                     model "explicitly null" anywhere: our optional fields are simply absent
+                     while the reconciliation is PENDING. -->
+                <openApiNullable>false</openApiNullable>
+              </configOptions>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- annotationProcessorPaths in this EXACT order: lombok, binding, mapstruct -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>${compiler-plugin.version}</version>
+        <configuration>
+          <annotationProcessorPaths>
+            <path>
+              <groupId>org.projectlombok</groupId>
+              <artifactId>lombok</artifactId>
+              <version>${lombok.version}</version>
+            </path>
+            <path>
+              <groupId>org.projectlombok</groupId>
+              <artifactId>lombok-mapstruct-binding</artifactId>
+              <version>${lombok-mapstruct-binding.version}</version>
+            </path>
+            <path>
+              <groupId>org.mapstruct</groupId>
+              <artifactId>mapstruct-processor</artifactId>
+              <version>${mapstruct.version}</version>
+            </path>
+          </annotationProcessorPaths>
+          <compilerArgs>
+            <arg>-parameters</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>${surefire-plugin.version}</version>
+        <configuration>
+          <systemPropertyVariables>
+            <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+            <maven.home>${maven.home}</maven.home>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
+
+      <!-- Checkstyle: severity=error, build FAILS. Semantic rules only, never format.
+           Bound to validate so it fails fast; validate precedes verify, so `mvn verify`
+           still runs it (constitution XII). -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-checkstyle-plugin</artifactId>
+        <version>${checkstyle-plugin.version}</version>
+        <dependencies>
+          <dependency>
+            <groupId>com.puppycrawl.tools</groupId>
+            <artifactId>checkstyle</artifactId>
+            <version>${checkstyle.version}</version>
+          </dependency>
+        </dependencies>
+        <configuration>
+          <configLocation>checkstyle.xml</configLocation>
+          <!-- checkstyle.xml refers to import-control.xml through ${config_loc};
+               the plugin does not define that property by itself. -->
+          <propertyExpansion>config_loc=${project.basedir}</propertyExpansion>
+          <violationSeverity>error</violationSeverity>
+          <failOnViolation>true</failOnViolation>
+          <includeTestSourceDirectory>false</includeTestSourceDirectory>
+          <sourceDirectories>
+            <sourceDirectory>${project.basedir}/src/main/java</sourceDirectory>
+          </sourceDirectories>
+        </configuration>
+        <executions>
+          <execution>
+            <id>checkstyle-validate</id>
+            <phase>validate</phase>
+            <goals>
+              <goal>check</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- Spotless owns formatting entirely. apply runs locally; check runs in verify.
+           The build NEVER modifies files. -->
+      <plugin>
+        <groupId>com.diffplug.spotless</groupId>
+        <artifactId>spotless-maven-plugin</artifactId>
+        <version>${spotless.version}</version>
+        <configuration>
+          <java>
+            <includes>
+              <include>src/main/java/**/*.java</include>
+              <include>src/test/java/**/*.java</include>
+            </includes>
+            <palantirJavaFormat>
+              <version>${palantir.version}</version>
+            </palantirJavaFormat>
+            <removeUnusedImports/>
+          </java>
+        </configuration>
+        <executions>
+          <execution>
+            <id>spotless-check</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>check</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

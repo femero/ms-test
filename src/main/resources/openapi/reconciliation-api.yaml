@@ -1,0 +1,168 @@
+openapi: 3.0.3
+
+# Fuente de verdad del contrato REST. Ningun campo se deriva del codigo.
+# Destino en el repositorio: src/main/resources/openapi/reconciliation-api.yaml
+# openapi-generator-maven-plugin (generatorName jaxrs-spec, library quarkus) genera de
+# aqui las interfaces JAX-RS y los modelos, en generate-sources y hacia target/. Lo
+# generado no se versiona. Se descarto la extension quarkus-openapi-generator-server:
+# sus dos generadores estan en Preview y Experimental. Ver D-01 en research.md.
+#
+# VERSION 3.0.3 A PROPOSITO, no 3.1. Ver D-01 en research.md: ningun generador del
+# ecosistema soporta 3.1 con garantias, y bajo 3.1 openapi-generator deja de compartir
+# los tipos referenciados por $ref, lo que generaria cuatro clases distintas para
+# MonetaryAmount en vez de una. El contrato no usa ninguna capacidad de 3.1.
+
+info:
+  title: Reconciliation API
+  version: 1.0.0
+  description: >
+    Consulta del detalle de una conciliacion de pagos por su referencia de operacion.
+    Es la unica superficie REST del servicio: listado y busqueda estan fuera de alcance.
+    Sin autenticacion ni autorizacion, delegadas al perimetro.
+
+servers:
+  - url: /v1
+    description: Base path versionado
+
+tags:
+  - name: reconciliations
+    description: Consulta de conciliaciones
+
+paths:
+  /reconciliations/{operationReference}:
+    get:
+      tags:
+        - reconciliations
+      operationId: getReconciliationByOperationReference
+      summary: Obtiene el detalle de una conciliacion
+      description: >
+        Devuelve el estado de la conciliacion asociada a la referencia de operacion y, si
+        es MISMATCHED, la diferencia exacta entre el monto del pago reportado y el del
+        movimiento del core. Cubre FR-016 y FR-017.
+      parameters:
+        - name: operationReference
+          in: path
+          required: true
+          description: Referencia de operacion que vincula el pago con el movimiento del core.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+            example: OP-000123
+      responses:
+        '200':
+          description: Conciliacion encontrada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconciliationResponse'
+        '404':
+          description: No existe conciliacion para esa referencia de operacion.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+
+components:
+  schemas:
+
+    # Los montos viajan como string, nunca como number: un number JSON se deserializa
+    # como double en la mayoria de los clientes y perderia la precision decimal que
+    # BigDecimal mantiene en toda la cadena.
+    MonetaryAmount:
+      type: object
+      required:
+        - amount
+        - currency
+      properties:
+        amount:
+          type: string
+          pattern: '^-?\d{1,17}\.\d{2}$'
+          description: Importe con escala 2 exacta. Puede ser negativo solo en la diferencia.
+          example: '100.00'
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          description: Codigo ISO-4217.
+          example: PEN
+
+    ReconciliationStatus:
+      type: string
+      enum:
+        - PENDING
+        - MATCHED
+        - MISMATCHED
+      description: >
+        PENDING espera el movimiento del core. MATCHED y MISMATCHED son terminales.
+
+    ReconciliationResponse:
+      type: object
+      required:
+        - reconciliationId
+        - operationReference
+        - status
+        - paymentAmount
+        - createdAt
+      properties:
+        reconciliationId:
+          type: string
+          format: uuid
+          description: Identificador interno, UUIDv7.
+          example: 0182f3c4-21d1-7000-8000-000000000000
+        operationReference:
+          type: string
+          example: OP-000123
+        status:
+          $ref: '#/components/schemas/ReconciliationStatus'
+        paymentAmount:
+          $ref: '#/components/schemas/MonetaryAmount'
+        # allOf envolviendo un unico $ref es el idioma de OpenAPI 3.0 para anotar una
+        # referencia: en 3.0 cualquier propiedad hermana de $ref se ignora en silencio,
+        # y estas descripciones se perderian. En 3.1 si serian validas, pero ver la nota
+        # de version arriba.
+        coreAmount:
+          allOf:
+            - $ref: '#/components/schemas/MonetaryAmount'
+          description: Ausente mientras el estado sea PENDING.
+        difference:
+          allOf:
+            - $ref: '#/components/schemas/MonetaryAmount'
+          description: >
+            Ausente mientras el estado sea PENDING. Positiva si el core cobro de menos,
+            negativa si cobro de mas.
+        createdAt:
+          type: string
+          format: date-time
+          description: Instante de alta del pago reportado.
+        resolvedAt:
+          type: string
+          format: date-time
+          description: Ausente mientras el estado sea PENDING.
+
+    # RFC 7807. Se sirve como application/problem+json.
+    ProblemDetail:
+      type: object
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          format: uri
+          default: about:blank
+          example: 'https://bancatest.com/problems/reconciliation-not-found'
+        title:
+          type: string
+          example: Reconciliation not found
+        status:
+          type: integer
+          format: int32
+          example: 404
+        detail:
+          type: string
+          example: No reconciliation exists for operation reference OP-000123
+        instance:
+          type: string
+          format: uri
+          example: /v1/reconciliations/OP-000123

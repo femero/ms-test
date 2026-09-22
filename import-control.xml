@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE import-control PUBLIC
+    "-//Checkstyle//DTD ImportControl Configuration 1.4//EN"
+    "https://checkstyle.org/dtds/import_control_1_4.dtd">
+
+<!--
+  Enforces the hexagonal boundary of constitution V at build time.
+
+  Dependencies always point INWARDS, towards the domain:
+      infrastructure  ->  application  ->  domain
+  and never the other way round.
+
+  strategyOnMismatch="allowed" keeps this a blacklist: we only forbid what must
+  never cross a boundary, instead of enumerating every legal java.* import.
+-->
+<import-control pkg="com.bancatest.reconciliation" strategyOnMismatch="allowed">
+
+  <!-- The domain knows no frameworks and no outer layer. -->
+  <subpackage name="domain" strategyOnMismatch="allowed">
+    <disallow pkg="jakarta.persistence"/>
+    <disallow pkg="jakarta.enterprise"/>
+    <disallow pkg="jakarta.inject"/>
+    <disallow pkg="jakarta.ws"/>
+    <disallow pkg="io.smallrye"/>
+    <disallow pkg="io.quarkus"/>
+    <disallow pkg="org.apache.kafka"/>
+    <disallow pkg="org.apache.avro"/>
+    <disallow pkg="org.hibernate"/>
+    <disallow pkg="org.mapstruct"/>
+    <disallow pkg="lombok"/>
+    <disallow pkg="com.fasterxml"/>
+    <disallow pkg="com.bancatest.reconciliation.application"/>
+    <disallow pkg="com.bancatest.reconciliation.infrastructure"/>
+  </subpackage>
+
+  <!-- The application layer orchestrates the domain through ports.
+       It may use CDI, but never touches infrastructure. -->
+  <subpackage name="application" strategyOnMismatch="allowed">
+    <disallow pkg="jakarta.persistence"/>
+    <disallow pkg="org.apache.kafka"/>
+    <disallow pkg="org.apache.avro"/>
+    <disallow pkg="org.hibernate"/>
+    <disallow pkg="lombok"/>
+    <disallow pkg="com.bancatest.reconciliation.infrastructure"/>
+  </subpackage>
+
+  <!-- Infrastructure may use anything, except Lombok, which is confined to the
+       JPA entity package where Hibernate demands accessors and a no-arg
+       constructor (constitution X). -->
+  <subpackage name="infrastructure" strategyOnMismatch="allowed">
+    <disallow pkg="lombok"/>
+    <subpackage name="adapter" strategyOnMismatch="allowed">
+      <subpackage name="out" strategyOnMismatch="allowed">
+        <subpackage name="persistence" strategyOnMismatch="allowed">
+          <subpackage name="entity" strategyOnMismatch="allowed">
+            <allow pkg="lombok"/>
+          </subpackage>
+        </subpackage>
+      </subpackage>
+    </subpackage>
+  </subpackage>
+
+</import-control>

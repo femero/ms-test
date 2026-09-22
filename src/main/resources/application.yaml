@@ -1,0 +1,171 @@
+# Every connection value is ${NAME} with NO default on purpose: if one is missing the
+# application must fail at startup rather than degrade silently (constitution IV).
+
+quarkus:
+  application:
+    name: ms-conciliaciones
+
+  # Never start containers, in dev or in test. Beyond the "no containers" rule, this is
+  # what keeps schema-management honest: its default of `none` is silently overridden to
+  # `drop-and-create` when Dev Services is active (R-01/R-02).
+  devservices:
+    enabled: false
+
+  datasource:
+    db-kind: postgresql
+    # Direct connection, or the SESSION-mode pooler. The transaction-mode pooler is not
+    # compatible with Hibernate prepared statements.
+    jdbc:
+      url: ${DB_URL}
+      # The pool is the real concurrency ceiling: virtual threads are cheap, database
+      # connections are not (R-13).
+      min-size: 5
+      max-size: 16
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+
+  hibernate-orm:
+    # Hibernate never creates, validates nor alters the schema. The DDL lives in
+    # db/schema.sql and a person applies it.
+    # NOTE: this property replaced the deprecated `database.generation` in Quarkus 3.22.
+    schema-management:
+      strategy: none
+    # Stops any import.sql on the classpath from being applied at startup.
+    sql-load-script: no-file
+
+  redis:
+    hosts: ${REDIS_HOSTS}
+
+  # The contract declares `servers: /v1`, but the generator does not fold that into the
+  # @Path of the generated interface. Setting it here keeps the served path identical to
+  # the contract instead of quietly dropping the version prefix.
+  http:
+    root-path: /v1
+
+  log:
+    console:
+      json:
+        enabled: true
+    level: INFO
+    category:
+      "com.bancatest.reconciliation":
+        level: INFO
+
+# Kafka / Confluent Cloud. The `kafka.` prefix is global: Quarkus propagates these to
+# every channel, so they are not repeated per channel below.
+# Keys are fully nested on purpose: a dotted key such as `schema.registry.url:` inside
+# `kafka:` is not read as `kafka.schema.registry.url` and the client never receives it.
+kafka:
+  bootstrap:
+    servers: ${KAFKA_BOOTSTRAP_SERVERS}
+  security:
+    protocol: SASL_SSL
+  sasl:
+    mechanism: PLAIN
+    # The JAAS config MUST end in a semicolon or it does not parse.
+    jaas:
+      config: >-
+        org.apache.kafka.common.security.plain.PlainLoginModule required
+        username='${KAFKA_API_KEY}' password='${KAFKA_API_SECRET}';
+  # Confluent Schema Registry. These credentials are a DIFFERENT key/secret pair from the
+  # cluster ones; reusing the broker pair returns 401.
+  schema:
+    registry:
+      url: ${SCHEMA_REGISTRY_URL}
+  basic:
+    auth:
+      credentials:
+        source: USER_INFO
+      user:
+        info: ${SCHEMA_REGISTRY_API_KEY}:${SCHEMA_REGISTRY_API_SECRET}
+
+# Kafka-client keys are fully nested for the same reason as the `kafka:` block above:
+# a dotted key such as `dead-letter-queue.topic:` is silently ignored in YAML.
+mp:
+  messaging:
+    incoming:
+      payments-in:
+        connector: smallrye-kafka
+        topic: ${KAFKA_TOPIC_PAYMENTS_IN}
+        # Reactive Messaging commits after processing; never let the client do it early.
+        enable:
+          auto:
+            commit: false
+        # The offset of a failed record is committed and the record is written to the DLQ,
+        # so one bad message never stops the stream.
+        failure-strategy: dead-letter-queue
+        # Declared explicitly: the default is `dead-letter-topic-$channel`, a generated
+        # name that does not exist in Confluent Cloud, where topics are not auto-created.
+        dead-letter-queue:
+          topic: ${KAFKA_TOPIC_PAYMENTS_DLQ}
+        partition:
+          assignment:
+            strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+
+      core-transactions-in:
+        connector: smallrye-kafka
+        topic: ${KAFKA_TOPIC_CORE_TRANSACTIONS_IN}
+        enable:
+          auto:
+            commit: false
+        failure-strategy: dead-letter-queue
+        dead-letter-queue:
+          topic: ${KAFKA_TOPIC_CORE_TRANSACTIONS_DLQ}
+        partition:
+          assignment:
+            strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+
+    outgoing:
+      results-out:
+        connector: smallrye-kafka
+        topic: ${KAFKA_TOPIC_RESULTS_OUT}
+        key:
+          serializer: org.apache.kafka.common.serialization.StringSerializer
+        # MUST stay false. Unlike Apicurio, the Confluent serde auto-registers schemas by
+        # default, and the team owns schema registration (constitution III).
+        auto:
+          register:
+            schemas: false
+
+      discrepancies-out:
+        connector: smallrye-kafka
+        topic: ${KAFKA_TOPIC_DISCREPANCIES_OUT}
+        key:
+          serializer: org.apache.kafka.common.serialization.StringSerializer
+        auto:
+          register:
+            schemas: false
+
+# Avro code generation, read at build time by the quarkus-avro codegen provider.
+# Note the missing `quarkus.` prefix: these are `avro.codegen.*`, not Quarkus config.
+avro:
+  codegen:
+    # MUST be true. Its default of false generates java.nio.ByteBuffer for
+    # decimal logical types instead of BigDecimal, which would break the precision
+    # chain exactly at the Avro boundary (R-12). Verified by inspecting the
+    # generated PaymentExecuted.amount field.
+    enableDecimalLogicalType: true
+    # Otherwise string fields arrive as CharSequence.
+    stringType: String
+
+# Business configuration, bound to ReconciliationConfig via @ConfigMapping.
+# These values reach the domain converted into Value Objects; the interface itself is
+# never injected into the domain.
+reconciliation:
+  tolerance:
+    # A fixed amount with its currency, never a percentage. The difference is computed
+    # by direct subtraction, so no division is involved anywhere.
+    amount: "1.00"
+    currency: PEN
+  idempotency:
+    # TTL of the Redis fast pre-filter. Redis is not the guarantee: if the key expires
+    # or Redis is down, the UNIQUE index in the database still rejects the duplicate.
+    ttl: PT24H
+
+# Human-readable logs when running locally with quarkus:dev.
+"%dev":
+  quarkus:
+    log:
+      console:
+        json:
+          enabled: false

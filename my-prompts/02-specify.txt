@@ -1,0 +1,98 @@
+/speckit.specify
+
+Servicio de conciliación de pagos. DEMO técnica. Verifica que cada pago
+reportado tenga su movimiento del core, y reporta los casos que no cuadran.
+
+ALCANCE FUNCIONAL
+
+RF-01 Recepción de pagos reportados
+El servicio recibe los pagos reportados y crea una conciliación en estado
+PENDING. Cada pago trae identificador de evento, referencia de operación,
+cuenta, monto, moneda y fecha.
+
+RF-02 Recepción de movimientos del core
+El servicio recibe los movimientos del core. Cada movimiento trae
+identificador de evento, referencia de operación, monto, moneda y fecha. Al
+llegar, busca la conciliación PENDING con esa referencia y la resuelve.
+
+RF-03 Comparación
+diferencia = monto del pago - monto del movimiento
+- Diferencia cero: MATCHED.
+- Diferencia positiva menor o igual a la tolerancia: MATCHED (comisión).
+- Diferencia positiva mayor a la tolerancia: MISMATCHED.
+- Diferencia negativa (el core cobró de más): MISMATCHED siempre.
+La tolerancia es un monto fijo: PEN 1.00.
+
+RF-04 Estados
+- PENDING: esperando el movimiento del core.
+- MATCHED: cuadra dentro de tolerancia.
+- MISMATCHED: no cuadra. Se registra la diferencia exacta.
+Transiciones válidas:
+  PENDING -> MATCHED
+  PENDING -> MISMATCHED
+MATCHED y MISMATCHED son terminales. Cualquier otra transición se rechaza.
+
+RF-05 Publicación de resultados
+Cada conciliación resuelta se publica: MATCHED en el canal de conformes,
+MISMATCHED en el canal de discrepancias.
+
+RF-06 Consulta
+Consulta del detalle de una conciliación por su referencia de operación. Si
+no existe, responde no encontrada.
+
+RF-07 Procesamiento sin duplicados
+Solo existe una conciliación por referencia de operación. Un pago reportado
+con una referencia que ya existe se descarta sin efecto.
+
+REGLAS DE NEGOCIO
+RN-01 Una conciliación resuelta es final. Todo movimiento posterior sobre ella
+      se descarta sin efecto y se registra como advertencia.
+RN-02 Un pago o movimiento con monto cero o negativo, o en moneda distinta de
+      PEN, es inválido y va al canal de mensajes fallidos.
+RN-03 Un movimiento sin conciliación asociada se descarta y se registra como
+      advertencia.
+
+CRITERIOS DE ACEPTACION
+- Pago 100.00, movimiento 100.00: MATCHED, publicado en conformes.
+- Pago 100.00, movimiento 99.50: MATCHED.
+- Pago 100.00, movimiento 99.00: MATCHED (límite exacto de tolerancia).
+- Pago 100.00, movimiento 98.99: MISMATCHED, diferencia 1.01.
+- Pago 100.00, movimiento 95.00: MISMATCHED, diferencia 5.00, publicado en
+  discrepancias.
+- Pago 100.00, movimiento 100.50: MISMATCHED, diferencia -0.50.
+- El mismo pago recibido dos veces: una sola conciliación, en PENDING.
+- Movimiento sobre una conciliación MATCHED: se descarta, no se publica nada.
+- Movimiento sin conciliación: se descarta, no se publica nada.
+- Pago de 0.00 o en USD: no crea conciliación, va a mensajes fallidos.
+- Consulta de una referencia inexistente: no encontrada.
+
+LIMITACION CONOCIDA (se documenta en el README)
+Kafka no garantiza orden entre topics distintos: un movimiento puede llegar
+antes que su pago, se descarta por RN-03, y el pago queda PENDING.
+
+FUERA DE ALCANCE
+- Movimiento que llega antes que su pago.
+- Detección de huérfanos, fecha contable, hora de corte, archivo de cierre.
+- Otras monedas y conversión entre monedas.
+- Listado o búsqueda; solo consulta por referencia.
+- Historial de transiciones, reintento manual, corrección automática.
+- Notificaciones, interfaz gráfica, autenticación y autorización.
+
+RESTRICCIONES DE IMPLEMENTACION
+- Existe UN SOLO aggregate root: Reconciliation. El movimiento del core es un
+  dato de entrada, no una entidad persistida.
+- La diferencia es un campo de la conciliación, no una entidad ni tabla.
+- No se crean endpoints, casos de uso, puertos ni eventos fuera de estos
+  requisitos.
+- No se crean interfaces con una sola implementación salvo los puertos.
+- No se implementan reintentos, circuit breakers, timeouts configurables ni
+  caché más allá de lo que el plan indique.
+
+RESTRICCIONES DE INTEGRACION
+Topics existentes en Confluent Cloud:
+  Consume  pagos reportados      [COMPLETAR]   DLQ [COMPLETAR]
+  Consume  movimientos del core  [COMPLETAR]   DLQ [COMPLETAR]
+  Publica  conformes             [COMPLETAR]
+  Publica  discrepancias         [COMPLETAR]
+Los esquemas Avro de salida se entregan como .avsc en el repositorio para que
+el equipo los registre.

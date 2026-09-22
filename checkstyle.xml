@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE module PUBLIC
+    "-//Checkstyle//DTD Checkstyle Configuration 1.3//EN"
+    "https://checkstyle.org/dtds/configuration_1_3.dtd">
+
+<!--
+  Semantic rules ONLY. Formatting (indentation, whitespace, braces) belongs to
+  Spotless and must never be duplicated here (constitution XII).
+  severity=error so the build fails instead of warning.
+-->
+<module name="Checker">
+  <property name="severity" value="error"/>
+  <property name="charset" value="UTF-8"/>
+  <property name="fileExtensions" value="java"/>
+
+  <!-- Explicitly listed as a semantic rule by the constitution -->
+  <module name="LineLength">
+    <property name="max" value="140"/>
+    <property name="ignorePattern" value="^\s*\*.*https?://"/>
+  </module>
+
+  <module name="TreeWalker">
+
+    <!-- Architectural boundary enforcement: this is what keeps the domain clean.
+         It is a build gate, not a matter of discipline (constitution V). -->
+    <module name="ImportControl">
+      <property name="file" value="${config_loc}/import-control.xml"/>
+    </module>
+
+    <module name="AvoidStarImport"/>
+    <module name="UnusedImports">
+      <property name="processJavadoc" value="true"/>
+    </module>
+    <module name="IllegalImport">
+      <property name="illegalPkgs" value="sun,java.util.Date"/>
+    </module>
+
+    <module name="CyclomaticComplexity">
+      <property name="max" value="10"/>
+    </module>
+
+    <module name="MethodLength">
+      <property name="max" value="40"/>
+      <property name="countEmpty" value="false"/>
+    </module>
+
+    <module name="ParameterNumber">
+      <property name="max" value="5"/>
+      <property name="tokens" value="METHOD_DEF"/>
+    </module>
+
+    <!-- Constitution X: java.util.Date is forbidden outright -->
+    <module name="IllegalType">
+      <property name="illegalClassNames" value="java.util.Date,java.sql.Date,java.util.Calendar"/>
+    </module>
+
+    <!-- Constitution IX: synchronized is forbidden in I/O sections; ReentrantLock instead.
+         Checkstyle cannot tell whether a block does I/O, so this flags every use and
+         forces an explicit justification. -->
+    <module name="RegexpSinglelineJava">
+      <property name="format" value="\bsynchronized\b"/>
+      <property name="message"
+                value="synchronized is forbidden in I/O sections (constitution IX). Use ReentrantLock."/>
+      <property name="ignoreComments" value="true"/>
+    </module>
+
+    <module name="RegexpSinglelineJava">
+      <property name="format" value="System\.(out|err)\.print"/>
+      <property name="message" value="Use JBoss Logging, never System.out/err."/>
+      <property name="ignoreComments" value="true"/>
+    </module>
+
+    <module name="RegexpSinglelineJava">
+      <property name="format" value="\.printStackTrace\(\)"/>
+      <property name="message" value="Log the exception as an argument, never printStackTrace()."/>
+      <property name="ignoreComments" value="true"/>
+    </module>
+
+  </module>
+</module>

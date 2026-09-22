@@ -1,0 +1,52 @@
+{
+  "type": "record",
+  "name": "PaymentExecuted",
+  "namespace": "pe.com.bancatest.payments.events",
+  "doc": "Pago reportado por el sistema de pagos. Contrato de integracion de ENTRADA, no el modelo de dominio: el adaptador lo traduce a ReconcilePaymentCommand antes de tocar el dominio. Lo registra el equipo en Confluent Schema Registry; el auto-registro del productor esta desactivado.",
+  "fields": [
+    {
+      "name": "eventId",
+      "type": "string",
+      "default": "",
+      "doc": "Identificador del evento. INFORMATIVO: no participa en la idempotencia, que se ancla exclusivamente en operationReference (FR-018). No entra en el comando del dominio."
+    },
+    {
+      "name": "operationReference",
+      "type": "string",
+      "default": "",
+      "doc": "Referencia de operacion. Clave de negocio que vincula este pago con su movimiento del core, y unico criterio de idempotencia."
+    },
+    {
+      "name": "accountNumber",
+      "type": "string",
+      "default": "",
+      "doc": "Numero de cuenta. Informativo: ninguna regla de negocio lo utiliza. Prohibido loguearlo completo."
+    },
+    {
+      "name": "amount",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 19,
+        "scale": 2
+      },
+      "default": "\u0000",
+      "doc": "Monto del pago. bytes con logicalType decimal, nunca double: preserva la precision exacta. Default = unscaled 0, es decir 0.00, que el consumidor rechaza por FR-022."
+    },
+    {
+      "name": "currency",
+      "type": "string",
+      "default": "",
+      "doc": "Codigo ISO-4217. Cualquier valor distinto de PEN es invalido y el mensaje va a la DLQ (FR-022)."
+    },
+    {
+      "name": "occurredAt",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      },
+      "default": 0,
+      "doc": "Instante en que ocurrio el pago. Informativo: ninguna regla del alcance depende de la fecha."
+    }
+  ]
+}

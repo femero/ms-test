@@ -1,0 +1,74 @@
+{
+  "type": "record",
+  "name": "DiscrepancyDetected",
+  "namespace": "pe.com.bancatest.reconciliation.events",
+  "doc": "Conciliacion discrepante: la diferencia es positiva y mayor a la tolerancia, o negativa de cualquier magnitud (FR-007). Contrato de SALIDA, publicado en el canal de discrepancias. No hay enum de motivo: la spec solo distingue dentro o fuera de tolerancia, y el signo de la diferencia ya indica si el core cobro de mas.",
+  "fields": [
+    {
+      "name": "eventId",
+      "type": "string",
+      "default": "",
+      "doc": "Identificador de este evento de salida, generado por el servicio."
+    },
+    {
+      "name": "reconciliationId",
+      "type": "string",
+      "default": "",
+      "doc": "Identificador interno de la conciliacion, UUIDv7 en representacion canonica."
+    },
+    {
+      "name": "operationReference",
+      "type": "string",
+      "default": "",
+      "doc": "Referencia de operacion. Tambien es la key del mensaje Kafka."
+    },
+    {
+      "name": "paymentAmount",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 19,
+        "scale": 2
+      },
+      "default": "\u0000",
+      "doc": "Monto del pago reportado."
+    },
+    {
+      "name": "coreAmount",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 19,
+        "scale": 2
+      },
+      "default": "\u0000",
+      "doc": "Monto del movimiento del core. Nombre segun el glosario de la constitucion."
+    },
+    {
+      "name": "difference",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 19,
+        "scale": 2
+      },
+      "default": "\u0000",
+      "doc": "Diferencia = paymentAmount - coreAmount. Positiva si el core cobro de menos por encima de la tolerancia; negativa si cobro de mas."
+    },
+    {
+      "name": "currency",
+      "type": "string",
+      "default": "",
+      "doc": "Codigo ISO-4217, comun a los tres montos: comparar monedas distintas es imposible por construccion (FR-022)."
+    },
+    {
+      "name": "detectedAt",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      },
+      "default": 0,
+      "doc": "Instante en que la conciliacion paso a MISMATCHED."
+    }
+  ]
+}

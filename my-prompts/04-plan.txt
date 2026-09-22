@@ -1,0 +1,302 @@
+/speckit.plan
+
+Quarkus 3.x sobre Java 21, empaquetado JVM.
+Contract-first en las dos superficies de integración: OpenAPI para REST y
+Avro para Kafka. Ningún contrato se deriva del código.
+
+CONSULTA DE DOCUMENTACION
+Context7 está instalado en el entorno de DOS formas: como skill y como MCP.
+Ambas se usan siempre, no son alternativas ni se elige una.
+
+- Antes de escribir código que use cualquier librería externa se consulta su
+  documentación vigente con Context7, invocando tanto la skill como el MCP.
+  Si una de las dos no devuelve resultado o no cubre el caso, se usa la otra;
+  si ambas devuelven resultado, se contrasta antes de escribir.
+- Prohibido generar configuración o llamadas a API desde el conocimiento
+  entrenado del agente.
+- Si ninguna de las dos vías de Context7 cubre el caso, se consulta la
+  documentación oficial del proyecto.
+- Lo que no se pueda verificar por ninguna de esas vías se anota como
+  pendiente de verificación y se reporta; nunca se adivina una propiedad ni
+  una firma de método.
+- Librerías a consultar sí o sí: Quarkus y sus extensiones, MapStruct, Avro y
+  avro-maven-plugin, el serde Avro de Confluent, SmallRye Reactive Messaging,
+  quarkus-openapi-generator, quarkus-redis-client y java-uuid-generator.
+
+ESTRUCTURA DE PAQUETES
+com.bancatest.reconciliation
+  domain/
+    model/            Reconciliation (único aggregate root)
+    model/vo/         Amount, Currency, OperationReference, AccountNumber,
+                      ReconciliationId, ReconciliationStatus
+    port/in/          ReconcilePaymentUseCase, RegisterBankTransactionUseCase,
+                      QueryReconciliationUseCase
+    port/out/         ReconciliationRepository, ProcessedEventStore,
+                      ReconciliationEventPublisher
+    exception/        InvalidAmountException, CurrencyMismatchException,
+                      IllegalStateTransitionException
+  application/
+    service/          ReconcilePaymentService, RegisterBankTransactionService,
+                      QueryReconciliationService
+  infrastructure/
+    adapter/in/kafka/         PaymentConsumer, BankTransactionConsumer, mapper/
+    adapter/in/rest/          ReconciliationResource, mapper/
+    adapter/out/persistence/  entity/, mapper/, PanacheReconciliationRepository
+    adapter/out/redis/        RedisProcessedEventStore
+    adapter/out/messaging/    KafkaReconciliationEventPublisher, mapper/
+    config/
+
+El movimiento del core NO es entidad de dominio ni tabla: llega como comando
+al caso de uso, se compara y se descarta.
+
+CONFIGURACION
+application.yaml con quarkus-config-yaml.
+- Secretos como ${NOMBRE} sin valor por defecto: si falta, la aplicación falla
+  al arrancar.
+- Variables: DB_URL, DB_USERNAME, DB_PASSWORD, REDIS_HOSTS,
+  KAFKA_BOOTSTRAP_SERVERS, KAFKA_API_KEY, KAFKA_API_SECRET,
+  SCHEMA_REGISTRY_URL, SCHEMA_REGISTRY_API_KEY, SCHEMA_REGISTRY_API_SECRET.
+- .env.example con esos nombres vacíos; .env real en .gitignore.
+- Configuración de negocio con @ConfigMapping en infrastructure: tolerancia
+  (monto fijo con moneda, PEN 1.00) y TTL de idempotencia en Redis. Sus
+  valores entran al dominio convertidos en Value Objects.
+- Quarkus Dev Services desactivado explícitamente.
+
+REPRESENTACION DE MONTOS
+BigDecimal en toda la cadena. Prohibido double y float.
+  Avro:         bytes con logicalType decimal, precision 19, scale 2
+  Dominio:      Value Object Amount (record con BigDecimal value y Currency)
+  Persistencia: NUMERIC(19,2) y VARCHAR(3) en columnas separadas
+  REST:         string en el JSON, no number
+
+Reglas:
+- Amount se construye desde String o BigDecimal. Prohibido new BigDecimal(double).
+- Normalización a escala 2 con RoundingMode.HALF_UP en el constructor compacto.
+- Comparación con compareTo, nunca equals. Como Amount es un record, se
+  sobrescriben equals y hashCode para comparar con compareTo.
+- Amount valida en construcción: no nulo, no negativo, moneda no nula.
+- Operar entre monedas distintas lanza CurrencyMismatchException.
+- La diferencia se calcula como resta directa, sin división: la tolerancia es
+  un monto fijo, no un porcentaje.
+
+LOMBOK
+Solo en infrastructure/adapter/out/persistence/entity, y solo @Getter, @Setter
+y @NoArgsConstructor(access = PROTECTED). Prohibido en el resto del proyecto,
+y prohibidos @Data, @Builder, @EqualsAndHashCode y @Slf4j en cualquier lugar.
+La restricción la verifica el control de imports de Checkstyle.
+
+MAPPERS (MAPSTRUCT)
+Cuatro mappers, todos en infrastructure:
+  adapter/in/kafka/mapper         Avro de entrada -> comandos del dominio
+  adapter/in/rest/mapper          dominio -> DTOs generados de OpenAPI
+  adapter/out/persistence/mapper  dominio <-> entidades JPA
+  adapter/out/messaging/mapper    dominio -> Avro de salida
+
+- @Mapper(componentModel = JAKARTA_CDI).
+- unmappedTargetPolicy = ReportingPolicy.ERROR: un campo sin mapear rompe el
+  build.
+- Los Value Objects se mapean con métodos default o @Named en el propio mapper.
+- Prohibido mapear Avro directo al agregado: el mapper produce comandos o
+  Value Objects; el agregado se crea con su factory method.
+- El mapper de persistencia invoca Reconciliation.reconstitute(...) con
+  @ObjectFactory o un método default; nunca new ni setters.
+- annotationProcessorPaths en este orden exacto: lombok,
+  lombok-mapstruct-binding, mapstruct-processor.
+- Cada mapper tiene test de ida y vuelta.
+
+CONTRACT-FIRST: API REST (OpenAPI)
+- Contrato en src/main/resources/openapi/reconciliation-api.yaml, OpenAPI 3.1,
+  versionado y revisado en PR.
+- quarkus-openapi-generator-server genera interfaces JAX-RS y DTOs en
+  generate-sources. Lo generado vive en target y no se versiona.
+- El recurso implementa la interfaz generada.
+- Prohibido @Schema, @Operation y @APIResponse en el código.
+- Desactivada la generación automática de OpenAPI desde código.
+- Los DTOs son de infraestructura; un mapper traduce a dominio. Prohibido
+  exponer entidades de dominio o JPA.
+- Montos como string con pattern numérico.
+- Errores con RFC 7807 (application/problem+json).
+
+Contrato completo:
+  GET /v1/reconciliations/{operationReference}
+    200 ReconciliationResponse
+    404 ProblemDetail
+
+Es el único endpoint. Listado y búsqueda están fuera de alcance.
+
+CONTRACT-FIRST: EVENTOS (AVRO)
+Esquemas en src/main/avro. Son contratos de integración, no el modelo de
+dominio.
+
+Entrada:
+  PaymentExecuted.avsc      namespace pe.com.bancatest.payments.events
+    eventId            string
+    operationReference string
+    accountNumber      string
+    amount             bytes, decimal, precision 19, scale 2
+    currency           string
+    occurredAt         long, timestamp-millis
+
+  BankTransactionReported.avsc  namespace pe.com.bancatest.banking.events
+    eventId            string
+    operationReference string
+    amount             bytes, decimal, precision 19, scale 2
+    currency           string
+    occurredAt         long, timestamp-millis
+
+Salida:
+  ReconciliationMatched.avsc  namespace pe.com.bancatest.reconciliation.events
+    eventId            string
+    reconciliationId   string
+    operationReference string
+    amount             bytes, decimal, precision 19, scale 2
+    currency           string
+    difference         bytes, decimal, precision 19, scale 2
+    reconciledAt       long, timestamp-millis
+
+  DiscrepancyDetected.avsc    namespace pe.com.bancatest.reconciliation.events
+    eventId            string
+    reconciliationId   string
+    operationReference string
+    paymentAmount      bytes, decimal, precision 19, scale 2
+    bankAmount         bytes, decimal, precision 19, scale 2
+    difference         bytes, decimal, precision 19, scale 2
+    currency           string
+    detectedAt         long, timestamp-millis
+
+No hay enum de motivo: la spec solo distingue dentro o fuera de tolerancia, y
+el signo de la diferencia ya indica si el movimiento fue mayor que el pago.
+
+Reglas:
+- Montos con bytes + logicalType decimal, nunca double.
+- Instantes con timestamp-millis.
+- Todo campo nuevo con "default".
+- Campos opcionales como union ["null","T"] con default null, null primero.
+- Prohibido renombrar campos: se usan "aliases".
+- avro-maven-plugin genera las clases en generate-sources; no se versionan.
+- Los .avsc de salida se entregan para que el equipo los registre: el
+  auto-registro está desactivado.
+
+MAQUINA DE ESTADOS
+Dentro del agregado, sin librería externa.
+
+  PENDING    -> MATCHED
+  PENDING    -> MISMATCHED
+  MATCHED    -> (terminal)
+  MISMATCHED -> (terminal)
+
+- ReconciliationStatus es un enum en domain/model/vo con sus transiciones
+  válidas en un Map<Status, Set<Status>> estático, expuesto por
+  canTransitionTo(Status).
+- Sin setStatus(). El estado cambia con match(...) y markAsMismatched(...).
+- Cada método valida la transición antes de aplicarla; si no es válida lanza
+  IllegalStateTransitionException con estado origen y destino.
+- Un movimiento sobre una conciliación ya resuelta se descarta sin efecto: el
+  caso de uso consulta el estado ANTES de invocar la transición y registra
+  WARN. La excepción queda como red de seguridad, no como control de flujo.
+- El estado se persiste como VARCHAR con name(). Prohibido ordinal().
+- @Enumerated(EnumType.STRING) en la entidad JPA, nunca en el dominio.
+- Test parametrizado con la matriz completa de transiciones, JUnit puro.
+
+PERSISTENCIA
+- quarkus-hibernate-orm-panache con PanacheRepository. Prohibido PanacheEntity.
+- PostgreSQL en Supabase, driver quarkus-jdbc-postgresql bloqueante. La
+  conexión es directa o por el pooler en modo sesión, nunca en modo
+  transacción.
+- Claves primarias UUIDv7 generadas en aplicación con
+  com.fasterxml.uuid:java-uuid-generator, para que start() devuelva un
+  agregado completo antes de persistir.
+- Prohibido Flyway. El DDL se entrega en db/schema.sql para que una persona lo
+  ejecute. Hibernate nunca crea, valida ni altera el esquema: la propiedad de
+  Quarkus que lo desactiva se verifica con Context7.
+- Una sola tabla: reconciliations.
+- Montos como NUMERIC(19,2) con columna de moneda VARCHAR(3).
+- Índice UNIQUE sobre operation_reference: es la garantía real de que solo
+  existe una conciliación por referencia.
+
+REDIS
+- quarkus-redis-client (cliente Vert.x). No Jedis ni Lettuce.
+- API imperativa (RedisDataSource), por coherencia con el modelo bloqueante.
+- Un solo uso: filtro rápido de idempotencia.
+  SET dedup:{operationReference} NX EX {ttl}. Si no inserta, ya fue procesado
+  y se descarta. Si Redis no responde o la clave expiró, el UNIQUE de la base
+  rechaza el duplicado; un duplicado rechazado se trata como éxito.
+
+MENSAJERIA
+- SmallRye Reactive Messaging con el conector smallrye-kafka.
+- Serde Avro de Confluent contra Confluent Schema Registry. Prohibido
+  Apicurio.
+- Canales:
+    incoming  payments-in          topic [COMPLETAR]
+    incoming  bank-transactions-in topic [COMPLETAR]
+    outgoing  results-out          topic [COMPLETAR]
+    outgoing  discrepancies-out    topic [COMPLETAR]
+- Ambos incoming con failure-strategy=dead-letter-queue y el nombre del topic
+  de DLQ declarado explícitamente; prohibido el nombre por defecto.
+- partition.assignment.strategy=CooperativeStickyAssignor.
+- enable.auto.commit=false; commit después de procesar.
+- Key de los mensajes salientes: operationReference.
+- Sin outbox: la publicación ocurre después de confirmar la transacción. El
+  riesgo de perder el evento se documenta en el README.
+
+CONCURRENCIA
+- Modelo bloqueante con virtual threads. Sin Mutiny ni Panache reactive.
+- @RunOnVirtualThread en los métodos @Incoming y en los endpoints REST.
+- Prohibido synchronized en secciones con I/O: usar ReentrantLock.
+- El pool de conexiones JDBC es el límite real de concurrencia: se dimensiona
+  explícitamente.
+- La concurrencia de consumo está acotada por el número de particiones del
+  topic.
+
+API REST
+- quarkus-rest en modo bloqueante con virtual threads.
+- Sin autenticación ni autorización: se delega al perímetro.
+
+LOGS
+Fuera de alcance: métricas, trazas y dashboards. Sin Micrometer, Prometheus ni
+OpenTelemetry.
+- quarkus-logging-json para salida estructurada.
+- operationReference en el MDC al entrar cada consumer y cada endpoint, con
+  limpieza en finally.
+- Niveles:
+    INFO  transiciones de estado, evento descartado por idempotencia
+    WARN  discrepancia detectada, movimiento sobre conciliación resuelta,
+          movimiento sin conciliación
+    ERROR fallo de infraestructura, mensaje enviado a DLQ
+    DEBUG detalle de la comparación y la tolerancia aplicada
+- Prohibido loguear el payload completo o el número de cuenta completo.
+- Prohibido loguear credenciales.
+- Prohibido System.out.println y printStackTrace: se usa JBoss Logging.
+- Toda excepción se loguea con la excepción como argumento, no con
+  getMessage().
+
+CALIDAD
+- Checkstyle con checkstyle-maven-plugin, severity=error, en la fase validate.
+  Solo reglas semánticas, nunca formato: complejidad ciclomática max 10,
+  métodos max 40 líneas, parámetros max 5, línea max 140, imports sin estrella
+  ni sin usar, y control de imports por paquete (domain no importa frameworks
+  ni infrastructure; application no importa infrastructure; lombok solo en el
+  paquete de entidades JPA).
+- Spotless con palantir-java-format: spotless:apply en local, spotless:check
+  en mvn verify. El build nunca modifica archivos.
+- Sin umbral de cobertura.
+
+TESTING
+- Dominio con JUnit puro, sin @QuarkusTest ni contexto CDI.
+- Test de la matriz completa de transiciones de estado.
+- Test de validación en construcción de cada Value Object.
+- Test de Amount: 120.0 y 120.00 son iguales; monedas distintas fallan.
+- Test de idempotencia por consumer: el mismo evento dos veces produce un solo
+  efecto.
+- Test de cada mapper, de ida y vuelta.
+- Adaptadores con la infraestructura real ya configurada o con
+  InMemoryConnector de SmallRye. Prohibido Testcontainers y levantar
+  contenedores.
+- Los tests contra infraestructura real usan datos con prefijo identificable y
+  limpian lo que crean.
+
+LOCAL
+- quarkus:dev con hot reload.
+- Variables de entorno desde un .env local, nunca versionado.
+- Prohibido generar docker-compose: Postgres está en Supabase, Kafka y Schema
+  Registry en Confluent Cloud, Redis es una instancia local ya configurada.

@@ -1,0 +1,13 @@
+/speckit.clarify
+
+Es un servicio DEMO con solo las funciones principales de conciliación.
+Tus preguntas deben limitarse a:
+- incongruencias entre requisitos, reglas de negocio y criterios de aceptación
+- ambigüedades que impidan implementar un requisito existente
+- contradicciones con la constitución
+
+No propongas funcionalidad nueva, casos adicionales ni mejoras. Todo lo que
+está en FUERA DE ALCANCE queda fuera y no se pregunta.
+
+Si no encuentras incongruencias ni ambigüedades reales, dilo y no hagas
+preguntas.
